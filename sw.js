@@ -1,22 +1,26 @@
-const CACHE_NAME = 'afinador-v1';
+const CACHE_NAME = 'afinador-v2';
 const ASSETS = [
   './',
   'index.html',
   'style.css',
   'app.js',
-  'manifest.json'
+  'manifest.json',
+  'icon-192.png',
+  'icon-512.png',
+  'icon-512-maskable.png'
 ];
 
-// Instalación: guardar archivos esenciales en caché
+// Instalación: guardar archivos esenciales y forzar reemplazo inmediato
 self.addEventListener('install', (event) => {
+  self.skipWaiting();
   event.waitUntil(
     caches.open(CACHE_NAME).then((cache) => {
       return cache.addAll(ASSETS);
-    }).then(() => self.skipWaiting())
+    })
   );
 });
 
-// Activación: limpiar cachés antiguas
+// Activación: purgar todas las cachés anteriores inmediatamente
 self.addEventListener('activate', (event) => {
   event.waitUntil(
     caches.keys().then((keys) => {
@@ -27,27 +31,24 @@ self.addEventListener('activate', (event) => {
   );
 });
 
-// Estrategia Fetch: Servir desde caché, con respaldo en red
+// Estrategia Network-First para HTML / JS principales (evita versiones desactualizadas en el celular)
 self.addEventListener('fetch', (event) => {
   if (event.request.method !== 'GET') return;
+
   event.respondWith(
-    caches.match(event.request).then((cachedResponse) => {
-      if (cachedResponse) {
-        // Retornar de caché y actualizar en segundo plano (stale-while-revalidate)
-        fetch(event.request).then((networkResponse) => {
-          if (networkResponse && networkResponse.status === 200) {
-            caches.open(CACHE_NAME).then((cache) => cache.put(event.request, networkResponse));
-          }
-        }).catch(() => {/* Ignorar errores de red en segundo plano */});
-        return cachedResponse;
-      }
-      return fetch(event.request).then((networkResponse) => {
-        if (networkResponse && networkResponse.status === 200 && networkResponse.type === 'basic') {
+    fetch(event.request)
+      .then((networkResponse) => {
+        if (networkResponse && networkResponse.status === 200) {
           const responseToCache = networkResponse.clone();
           caches.open(CACHE_NAME).then((cache) => cache.put(event.request, responseToCache));
         }
         return networkResponse;
-      });
-    })
+      })
+      .catch(() => {
+        // En caso de estar 100% offline, servir desde la caché
+        return caches.match(event.request).then((cachedResponse) => {
+          return cachedResponse || caches.match('index.html');
+        });
+      })
   );
 });

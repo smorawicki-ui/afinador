@@ -15,6 +15,7 @@ let audioCtx = null;
 let analyser = null;
 let buffer = null;
 let isRunning = false;
+let wasTuned = false;
 
 // Variables para suavizado LERP de la aguja
 let currentRotation = 0;
@@ -30,6 +31,8 @@ const noteDisplay = document.getElementById("note-display");
 const freqDisplay = document.getElementById("freq-display");
 const centsDisplay = document.getElementById("cents-display");
 const needle = document.getElementById("gauge-needle");
+const gaugeBox = document.querySelector(".gauge-box");
+const gaugeArc = document.querySelector(".gauge-arc");
 const pegBtns = document.querySelectorAll(".peg-btn");
 
 function getTargetFreq(midiNote) {
@@ -74,6 +77,31 @@ function playTone(freq) {
   } catch (e) {
     console.error("Error reproduciendo tono:", e);
   }
+}
+
+// Señal sonora y háptica al alcanzar la afinación exacta
+function playTunedChime() {
+  try {
+    if (!audioCtx) return;
+    const osc = audioCtx.createOscillator();
+    const gain = audioCtx.createGain();
+
+    osc.type = "sine";
+    osc.frequency.setValueAtTime(880, audioCtx.currentTime); // Tono armónico cristalino A5 (880 Hz)
+    gain.gain.setValueAtTime(0.12, audioCtx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.0001, audioCtx.currentTime + 0.25);
+
+    osc.connect(gain);
+    gain.connect(audioCtx.destination);
+
+    osc.start(audioCtx.currentTime);
+    osc.stop(audioCtx.currentTime + 0.25);
+
+    // Vibración háptica en celulares soportados
+    if (navigator.vibrate) {
+      navigator.vibrate(80);
+    }
+  } catch (e) {}
 }
 
 tuningSelect.addEventListener("change", (e) => {
@@ -198,6 +226,15 @@ function processPitch() {
     const isTuned = Math.abs(cents) <= 3;
     needle.classList.toggle("tuned", isTuned);
     noteDisplay.classList.toggle("tuned", isTuned);
+    centsDisplay.classList.toggle("tuned", isTuned);
+    if (gaugeBox) gaugeBox.classList.toggle("tuned", isTuned);
+    if (gaugeArc) gaugeArc.classList.toggle("tuned", isTuned);
+
+    // Disparar señal sonora y háptica de afinación al entrar en afinación correcta
+    if (isTuned && !wasTuned) {
+      playTunedChime();
+    }
+    wasTuned = isTuned;
 
     if (selectedStringIdx === null) {
       pegBtns.forEach((b, i) => b.classList.toggle("active", i === targetIdx));
@@ -206,20 +243,18 @@ function processPitch() {
   requestAnimationFrame(processPitch);
 }
 
-micBtn.addEventListener("click", async () => {
+async function startMicrophone() {
   if (isRunning) return;
 
-  // 1. Detección de API de Micrófono
   const hasMediaDevices = !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia);
   const hasLegacyGetUserMedia = !!(navigator.getUserMedia || navigator.webkitGetUserMedia || navigator.mozGetUserMedia);
 
   if (!hasMediaDevices && !hasLegacyGetUserMedia) {
-    alert("Atención: El sistema de seguridad de tu teléfono requiere abrir esta página con conexión HTTPS (o enlace del servidor) para activar el micrófono. Los archivos abiertos localmente (file://) o por WhatsApp no tienen acceso al micrófono.");
+    alert("Atención: Tu navegador requiere abrir esta página con conexión HTTPS (o enlace de servidor) para activar el micrófono.");
     return;
   }
 
   try {
-    // 2. Inicializar AudioContext sincrónicamente para iOS Safari
     if (!audioCtx) {
       audioCtx = new (window.AudioContext || window.webkitAudioContext)();
     }
@@ -227,7 +262,6 @@ micBtn.addEventListener("click", async () => {
       await audioCtx.resume();
     }
 
-    // 3. Captura del Stream con fallback de restricciones para celulares
     let stream;
     if (hasMediaDevices) {
       try {
@@ -242,7 +276,6 @@ micBtn.addEventListener("click", async () => {
 
     const source = audioCtx.createMediaStreamSource(stream);
 
-    // Filtro paso-bajo (lowpass) a 800 Hz para cuerdas graves
     const lowpassFilter = audioCtx.createBiquadFilter();
     lowpassFilter.type = "lowpass";
     lowpassFilter.frequency.setValueAtTime(800, audioCtx.currentTime);
@@ -251,17 +284,26 @@ micBtn.addEventListener("click", async () => {
     analyser.fftSize = 2048;
     buffer = new Float32Array(analyser.fftSize);
 
-    // Intercalar lowpassFilter entre source y analyser
     source.connect(lowpassFilter);
     lowpassFilter.connect(analyser);
 
     isRunning = true;
     micBtn.textContent = "Escuchando...";
     micBtn.style.background = "#555";
+    localStorage.setItem('micAutoStart', 'true');
     processPitch();
   } catch (err) {
     console.error("Error micrófono:", err);
     alert("Error al solicitar acceso al micrófono: " + (err.message || err.name || "Permiso denegado"));
+  }
+}
+
+micBtn.addEventListener("click", startMicrophone);
+
+// Auto-iniciar micrófono al interactuar con cualquier parte de la pantalla si ya fue concedido previamente
+document.body.addEventListener("pointerdown", () => {
+  if (!isRunning && localStorage.getItem('micAutoStart') === 'true') {
+    startMicrophone();
   }
 });
 
@@ -269,7 +311,7 @@ micBtn.addEventListener("click", async () => {
 if ('serviceWorker' in navigator) {
   window.addEventListener('load', () => {
     navigator.serviceWorker.register('./sw.js')
-      .then((reg) => console.log('Service Worker registrado con éxito:', reg.scope))
+      .then((reg) => console.log('Service Worker v2 registrado con éxito:', reg.scope))
       .catch((err) => console.error('Error al registrar Service Worker:', err));
   });
 }
