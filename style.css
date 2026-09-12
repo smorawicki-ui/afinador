@@ -1,0 +1,36 @@
+* { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+body { background: #121212; color: #eee; display: flex; justify-content: center; height: 100vh; overflow: hidden; }
+
+.app-container { width: 100%; max-width: 420px; height: 100%; display: flex; flex-direction: column; justify-content: space-between; padding: 15px; }
+
+header { display: flex; flex-direction: column; gap: 8px; background: #1e1e1e; padding: 10px; border-radius: 8px; }
+.control-row { display: flex; justify-content: space-between; align-items: center; font-size: 0.9rem; }
+select, input[type="range"] { accent-color: #2ecc71; background: #2a2a2a; color: #fff; border: 1px solid #444; padding: 4px; border-radius: 4px; }
+
+.meter-section { text-align: center; margin: 5px 0; }
+.note-display { font-size: 3.5rem; font-weight: bold; color: #888; transition: color 0.1s; }
+.note-display.tuned { color: #2ecc71; }
+.freq-display { font-size: 0.9rem; color: #777; margin-bottom: 5px; }
+
+.gauge-box { position: relative; width: 220px; height: 110px; margin: 0 auto; overflow: hidden; border-bottom: 2px solid #333; }
+.gauge-arc { width: 220px; height: 220px; border-radius: 50%; border: 4px solid #333; position: relative; }
+.gauge-center-line { position: absolute; top: 0; left: 50%; width: 2px; height: 15px; background: #2ecc71; transform: translateX(-50%); }
+.gauge-needle { position: absolute; bottom: 50%; left: 50%; width: 3px; height: 95px; background: #e74c3c; transform-origin: bottom center; transform: translateX(-50%) rotate(0deg); transition: background 0.2s ease; }
+.gauge-needle.tuned { background: #2ecc71; }
+.cents-display { font-size: 0.85rem; color: #aaa; margin-top: 5px; }
+
+/* Pala y clavijas */
+.headstock-container { display: flex; justify-content: center; align-items: center; gap: 15px; }
+.pegs-col { display: flex; flex-direction: column; gap: 16px; }
+.peg-btn { width: 55px; height: 55px; border-radius: 50%; background: #222; border: 2px solid #444; color: #ccc; display: flex; flex-direction: column; align-items: center; justify-content: center; font-size: 0.8rem; cursor: pointer; }
+.peg-btn.active { border-color: #2ecc71; background: #1b3824; color: #2ecc71; font-weight: bold; }
+.peg-num { font-size: 0.65rem; color: #777; }
+
+.headstock-wood { width: 75px; height: 180px; background: #2c1a0e; border: 2px solid #1a0f07; border-radius: 20px 20px 5px 5px; position: relative; display: flex; align-items: center; justify-content: center; }
+.nut-line { position: absolute; bottom: 0; width: 100%; height: 6px; background: #ece5d8; }
+.brand { color: #52331c; font-size: 0.7rem; letter-spacing: 2px; transform: rotate(-90deg); font-weight: bold; }
+
+footer { display: flex; gap: 10px; }
+.mic-btn, .mode-btn { flex: 1; padding: 12px; border-radius: 8px; border: none; font-weight: bold; cursor: pointer; }
+.mic-btn { background: #2ecc71; color: #111; }
+.mode-btn { background: #333; color: #eee; }
