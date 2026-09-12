@@ -32,6 +32,21 @@ let harmonicJumpCount = 0;
 let pitchHistory = [];
 const HIST_SIZE = 5;
 
+// ---- New smoothing & stability constants ----
+const EMA_ALPHA = 0.2;               // pitch EMA smoothing factor
+const NEEDLE_JITTER_THRESHOLD = 1;   // cents change ignored
+const MAX_NEEDLE_DELTA = 5;          // max degrees per frame
+const STABLE_FRAME_COUNT = 4;        // frames needed to lock string
+const TUNED_DEADZONE = 4;            // cents within which we consider tuned
+const CONFIDENCE_THRESHOLD = 0.7;    // minimum confidence for auto‑detect
+
+// EMA pitch accumulator
+let emaPitch = null;
+// Previous effective cents for jitter filtering
+let prevEffectiveCents = 0;
+// Counter for stable detection of a candidate string
+let stableCount = 0;
+
 function getMedianPitch(newPitch) {
   pitchHistory.push(newPitch);
   if (pitchHistory.length > HIST_SIZE) {
@@ -417,15 +432,33 @@ function processPitch() {
       }
     }
 
-    // Amortiguación suave cerca del centro
+    // ---- Needle smoothing & jitter filtering ----
     let effectiveCents = cents;
     if (isTuned) {
       effectiveCents = cents * 0.25;
     }
 
-    const clampedCents = Math.max(-50, Math.min(50, effectiveCents));
-    targetRotation = (clampedCents / 50) * 45;
+    // Apply EMA smoothing to pitch for more stable needle
+    emaPitch = emaPitch !== null ? EMA_ALPHA * pitch + (1 - EMA_ALPHA) * emaPitch : pitch;
+    const smoothCents = 1200 * Math.log2(emaPitch / targetFreq);
 
+    // Use smoothed cents for effective calculation
+    effectiveCents = isTuned ? smoothCents * 0.25 : smoothCents;
+
+    // Jitter filter: ignore tiny changes
+    if (Math.abs(effectiveCents - prevEffectiveCents) < NEEDLE_JITTER_THRESHOLD) {
+      effectiveCents = prevEffectiveCents;
+    }
+    prevEffectiveCents = effectiveCents;
+
+    // Clamp and limit rotation delta per frame
+    const clampedCents = Math.max(-50, Math.min(50, effectiveCents));
+    const desiredRotation = (clampedCents / 50) * 45;
+    const delta = desiredRotation - currentRotation;
+    const limitedDelta = Math.abs(delta) > MAX_NEEDLE_DELTA ? Math.sign(delta) * MAX_NEEDLE_DELTA : delta;
+    targetRotation = currentRotation + limitedDelta;
+
+    // UI updates
     needle.classList.toggle("tuned", isTuned);
     noteDisplay.classList.toggle("tuned", isTuned);
     centsDisplay.classList.toggle("tuned", isTuned);
