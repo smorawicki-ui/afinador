@@ -1,40 +1,332 @@
-* { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
-body { background: #121212; color: #eee; display: flex; justify-content: center; height: 100vh; overflow: hidden; }
+@import url('https://fonts.googleapis.com/css2?family=Outfit:wght@400;600;700;800&display=swap');
 
-.app-container { width: 100%; max-width: 420px; height: 100%; display: flex; flex-direction: column; justify-content: space-between; padding: 15px; }
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+  font-family: 'Outfit', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-tap-highlight-color: transparent;
+}
 
-header { display: flex; flex-direction: column; gap: 8px; background: #1e1e1e; padding: 10px; border-radius: 8px; }
-.control-row { display: flex; justify-content: space-between; align-items: center; font-size: 0.9rem; }
-select, input[type="range"] { accent-color: #2ecc71; background: #2a2a2a; color: #fff; border: 1px solid #444; padding: 4px; border-radius: 4px; }
+html, body {
+  width: 100%;
+  height: 100%;
+  height: 100dvh;
+  background-color: #0b0d12;
+  color: #f0f3f8;
+  overflow: hidden;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+}
 
-.meter-section { text-align: center; margin: 5px 0; }
-.note-display { font-size: 3.8rem; font-weight: bold; color: #888; transition: color 0.15s ease, transform 0.2s ease, text-shadow 0.2s ease; }
-.note-display.tuned { color: #2ecc71; text-shadow: 0 0 22px rgba(46, 204, 113, 0.85); transform: scale(1.08); }
-.freq-display { font-size: 0.9rem; color: #777; margin-bottom: 5px; }
+.app-container {
+  width: 100%;
+  max-width: 440px;
+  height: 100%;
+  height: 100dvh;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  padding: 12px 16px;
+  padding-bottom: max(16px, env(safe-area-inset-bottom));
+  padding-top: max(12px, env(safe-area-inset-top));
+}
 
-.gauge-box { position: relative; width: 220px; height: 110px; margin: 0 auto; overflow: hidden; border-bottom: 2px solid #333; transition: border-color 0.2s ease; }
-.gauge-box.tuned { border-bottom-color: #2ecc71; }
-.gauge-arc { width: 220px; height: 220px; border-radius: 50%; border: 4px solid #333; position: relative; transition: border-color 0.2s ease; }
-.gauge-arc.tuned { border-color: #2ecc71; box-shadow: inset 0 0 15px rgba(46, 204, 113, 0.3); }
-.gauge-center-line { position: absolute; top: 0; left: 50%; width: 3px; height: 15px; background: #2ecc71; transform: translateX(-50%); box-shadow: 0 0 8px #2ecc71; }
-.gauge-needle { position: absolute; bottom: 50%; left: 50%; width: 3px; height: 95px; background: #e74c3c; transform-origin: bottom center; transform: translateX(-50%) rotate(0deg); transition: background 0.2s ease; }
-.gauge-needle.tuned { background: #2ecc71; box-shadow: 0 0 12px #2ecc71; }
-.cents-display { font-size: 0.9rem; color: #aaa; margin-top: 5px; transition: color 0.2s ease, font-weight 0.2s ease; }
-.cents-display.tuned { color: #2ecc71; font-weight: bold; }
+/* Header & Controls */
+header {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  background: rgba(22, 27, 38, 0.75);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  padding: 12px 14px;
+  border-radius: 16px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+}
 
-/* Pala y clavijas */
-.headstock-container { display: flex; justify-content: center; align-items: center; gap: 15px; }
-.pegs-col { display: flex; flex-direction: column; gap: 16px; }
-.peg-btn { width: 55px; height: 55px; border-radius: 50%; background: #222; border: 2px solid #444; color: #ccc; display: flex; flex-direction: column; align-items: center; justify-content: center; font-size: 0.8rem; cursor: pointer; transition: all 0.15s ease; }
-.peg-btn.active { border-color: #2ecc71; background: #1b3824; color: #2ecc71; font-weight: bold; box-shadow: 0 0 10px rgba(46, 204, 113, 0.4); }
-.peg-num { font-size: 0.65rem; color: #777; }
+.control-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 0.88rem;
+  font-weight: 600;
+  color: #a0aec0;
+}
 
-.headstock-wood { width: 75px; height: 180px; background: #2c1a0e; border: 2px solid #1a0f07; border-radius: 20px 20px 5px 5px; position: relative; display: flex; align-items: center; justify-content: center; box-shadow: inset 0 0 10px #000; }
-.nut-line { position: absolute; bottom: 0; width: 100%; height: 6px; background: #ece5d8; }
-.brand { color: #52331c; font-size: 0.7rem; letter-spacing: 2px; transform: rotate(-90deg); font-weight: bold; }
+.control-row label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  gap: 10px;
+}
 
-footer { display: flex; gap: 10px; }
-.mic-btn, .mode-btn { flex: 1; padding: 12px; border-radius: 8px; border: none; font-weight: bold; cursor: pointer; transition: background 0.2s ease, transform 0.1s ease; }
-.mic-btn { background: #2ecc71; color: #111; box-shadow: 0 2px 8px rgba(46, 204, 113, 0.4); }
-.mic-btn:active, .mode-btn:active { transform: scale(0.98); }
-.mode-btn { background: #333; color: #eee; }
+select {
+  accent-color: #00e676;
+  background: #1a202c;
+  color: #00e676;
+  font-weight: 600;
+  border: 1px solid rgba(0, 230, 118, 0.3);
+  padding: 6px 10px;
+  border-radius: 10px;
+  outline: none;
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+
+input[type="range"] {
+  accent-color: #00e676;
+  background: #1a202c;
+  height: 6px;
+  border-radius: 3px;
+  width: 110px;
+}
+
+/* Install PWA Banner/Button */
+.install-btn {
+  display: none;
+  width: 100%;
+  padding: 8px 12px;
+  background: linear-gradient(135deg, #00e676, #00b0ff);
+  color: #0b0d12;
+  font-weight: 700;
+  font-size: 0.82rem;
+  border: none;
+  border-radius: 10px;
+  cursor: pointer;
+  text-align: center;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  box-shadow: 0 4px 14px rgba(0, 230, 118, 0.3);
+}
+
+/* Meter Section */
+.meter-section {
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  margin: 2px 0;
+  flex-shrink: 0;
+}
+
+.note-display {
+  font-size: 4.2rem;
+  font-weight: 800;
+  color: #4a5568;
+  line-height: 1;
+  transition: color 0.15s ease, transform 0.2s cubic-bezier(0.175, 0.885, 0.32, 1.275), text-shadow 0.2s ease;
+  letter-spacing: -1px;
+}
+
+.note-display.tuned {
+  color: #00e676;
+  text-shadow: 0 0 28px rgba(0, 230, 118, 0.9);
+  transform: scale(1.1);
+}
+
+.freq-display {
+  font-size: 0.88rem;
+  font-weight: 600;
+  color: #718096;
+  margin-top: 2px;
+  margin-bottom: 8px;
+  letter-spacing: 0.5px;
+}
+
+.gauge-box {
+  position: relative;
+  width: 230px;
+  height: 115px;
+  margin: 0 auto;
+  overflow: hidden;
+  border-bottom: 2px solid rgba(255, 255, 255, 0.1);
+  transition: border-color 0.2s ease;
+}
+
+.gauge-box.tuned {
+  border-bottom-color: #00e676;
+}
+
+.gauge-arc {
+  width: 230px;
+  height: 230px;
+  border-radius: 50%;
+  border: 4px solid rgba(255, 255, 255, 0.1);
+  position: relative;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.gauge-arc.tuned {
+  border-color: #00e676;
+  box-shadow: inset 0 0 20px rgba(0, 230, 118, 0.35);
+}
+
+.gauge-center-line {
+  position: absolute;
+  top: 0;
+  left: 50%;
+  width: 3px;
+  height: 18px;
+  background: #00e676;
+  transform: translateX(-50%);
+  border-radius: 2px;
+  box-shadow: 0 0 10px #00e676;
+}
+
+.gauge-needle {
+  position: absolute;
+  bottom: 50%;
+  left: 50%;
+  width: 3px;
+  height: 98px;
+  background: #ff5252;
+  transform-origin: bottom center;
+  transform: translateX(-50%) rotate(0deg);
+  border-radius: 2px;
+  transition: background 0.2s ease, box-shadow 0.2s ease;
+}
+
+.gauge-needle.tuned {
+  background: #00e676;
+  box-shadow: 0 0 14px #00e676;
+}
+
+.cents-display {
+  font-size: 0.88rem;
+  font-weight: 600;
+  color: #a0aec0;
+  margin-top: 6px;
+  transition: color 0.2s ease;
+}
+
+.cents-display.tuned {
+  color: #00e676;
+  font-weight: 700;
+}
+
+/* Headstock & Pegs */
+.headstock-container {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 16px;
+  margin: 4px 0;
+}
+
+.pegs-col {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.peg-btn {
+  width: 54px;
+  height: 54px;
+  border-radius: 50%;
+  background: #171c26;
+  border: 2px solid rgba(255, 255, 255, 0.12);
+  color: #e2e8f0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.85rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+}
+
+.peg-btn:active {
+  transform: scale(0.92);
+}
+
+.peg-btn.active {
+  border-color: #00e676;
+  background: rgba(0, 230, 118, 0.12);
+  color: #00e676;
+  box-shadow: 0 0 16px rgba(0, 230, 118, 0.4);
+}
+
+.peg-num {
+  font-size: 0.65rem;
+  color: #718096;
+  font-weight: 600;
+}
+
+.headstock-wood {
+  width: 76px;
+  height: 170px;
+  background: linear-gradient(180deg, #2a1810 0%, #170d08 100%);
+  border: 2px solid #0d0704;
+  border-radius: 20px 20px 6px 6px;
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: inset 0 0 12px #000, 0 6px 20px rgba(0, 0, 0, 0.6);
+}
+
+.nut-line {
+  position: absolute;
+  bottom: 0;
+  width: 100%;
+  height: 6px;
+  background: #e2d8c3;
+  box-shadow: 0 -1px 3px rgba(0, 0, 0, 0.4);
+}
+
+.brand {
+  color: #633e24;
+  font-size: 0.72rem;
+  letter-spacing: 3px;
+  transform: rotate(-90deg);
+  font-weight: 800;
+}
+
+/* Footer Controls */
+footer {
+  display: flex;
+  gap: 12px;
+  width: 100%;
+  margin-top: 4px;
+}
+
+.mic-btn, .mode-btn {
+  flex: 1;
+  padding: 14px 10px;
+  border-radius: 14px;
+  border: none;
+  font-weight: 700;
+  font-size: 0.95rem;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  text-align: center;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+}
+
+.mic-btn {
+  background: linear-gradient(135deg, #00e676, #00c853);
+  color: #0b0d12;
+  box-shadow: 0 4px 16px rgba(0, 230, 118, 0.4);
+}
+
+.mic-btn:active, .mode-btn:active {
+  transform: scale(0.97);
+}
+
+.mode-btn {
+  background: #1e2430;
+  color: #f0f3f8;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}

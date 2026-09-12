@@ -16,6 +16,7 @@ let analyser = null;
 let buffer = null;
 let isRunning = false;
 let wasTuned = false;
+let deferredPrompt = null;
 
 // Variables para suavizado LERP de la aguja
 let currentRotation = 0;
@@ -27,6 +28,7 @@ const a4Slider = document.getElementById("a4-slider");
 const a4Val = document.getElementById("a4-val");
 const micBtn = document.getElementById("mic-btn");
 const modeBtn = document.getElementById("mode-btn");
+const installBtn = document.getElementById("install-btn");
 const noteDisplay = document.getElementById("note-display");
 const freqDisplay = document.getElementById("freq-display");
 const centsDisplay = document.getElementById("cents-display");
@@ -44,6 +46,28 @@ function updatePegLabels() {
   pegBtns.forEach(btn => {
     const idx = parseInt(btn.dataset.string);
     btn.querySelector(".peg-note").textContent = current[idx].n;
+  });
+}
+
+// Gestor de instalación de App PWA
+window.addEventListener("beforeinstallprompt", (e) => {
+  e.preventDefault();
+  deferredPrompt = e;
+  if (installBtn) {
+    installBtn.style.display = "block";
+  }
+});
+
+if (installBtn) {
+  installBtn.addEventListener("click", async () => {
+    if (deferredPrompt) {
+      deferredPrompt.prompt();
+      const { outcome } = await deferredPrompt.userChoice;
+      if (outcome === "accepted") {
+        installBtn.style.display = "none";
+      }
+      deferredPrompt = null;
+    }
   });
 }
 
@@ -87,7 +111,7 @@ function playTunedChime() {
     const gain = audioCtx.createGain();
 
     osc.type = "sine";
-    osc.frequency.setValueAtTime(880, audioCtx.currentTime); // Tono armónico cristalino A5 (880 Hz)
+    osc.frequency.setValueAtTime(880, audioCtx.currentTime);
     gain.gain.setValueAtTime(0.12, audioCtx.currentTime);
     gain.gain.exponentialRampToValueAtTime(0.0001, audioCtx.currentTime + 0.25);
 
@@ -97,7 +121,6 @@ function playTunedChime() {
     osc.start(audioCtx.currentTime);
     osc.stop(audioCtx.currentTime + 0.25);
 
-    // Vibración háptica en celulares soportados
     if (navigator.vibrate) {
       navigator.vibrate(80);
     }
@@ -149,7 +172,7 @@ function autoCorrelate(buf, sampleRate) {
   let rms = 0;
   for (let i = 0; i < SIZE; i++) rms += buf[i] * buf[i];
   rms = Math.sqrt(rms / SIZE);
-  if (rms < 0.01) return -1; // Silencio
+  if (rms < 0.01) return -1;
 
   let r1 = 0, r2 = SIZE - 1, thres = 0.2;
   for (let i = 0; i < SIZE / 2; i++) {
@@ -200,7 +223,6 @@ function processPitch() {
     if (targetIdx !== null) {
       target = tuning[targetIdx];
     } else {
-      // Auto-detect: busca la cuerda más cercana en semitonos
       let minDiff = Infinity;
       tuning.forEach((str, i) => {
         const tf = getTargetFreq(str.m);
@@ -216,12 +238,11 @@ function processPitch() {
     const targetFreq = getTargetFreq(target.m);
     const cents = 1200 * Math.log2(pitch / targetFreq);
 
-    // Actualizar nota e indicador de cents
     noteDisplay.textContent = target.n;
     centsDisplay.textContent = `${cents > 0 ? "+" : ""}${Math.round(cents)} cents`;
 
     const clampedCents = Math.max(-50, Math.min(50, cents));
-    targetRotation = (clampedCents / 50) * 45; // -45 a +45 grados
+    targetRotation = (clampedCents / 50) * 45;
 
     const isTuned = Math.abs(cents) <= 3;
     needle.classList.toggle("tuned", isTuned);
@@ -230,7 +251,6 @@ function processPitch() {
     if (gaugeBox) gaugeBox.classList.toggle("tuned", isTuned);
     if (gaugeArc) gaugeArc.classList.toggle("tuned", isTuned);
 
-    // Disparar señal sonora y háptica de afinación al entrar en afinación correcta
     if (isTuned && !wasTuned) {
       playTunedChime();
     }
@@ -250,7 +270,7 @@ async function startMicrophone() {
   const hasLegacyGetUserMedia = !!(navigator.getUserMedia || navigator.webkitGetUserMedia || navigator.mozGetUserMedia);
 
   if (!hasMediaDevices && !hasLegacyGetUserMedia) {
-    alert("Atención: Tu navegador requiere abrir esta página con conexión HTTPS (o enlace de servidor) para activar el micrófono.");
+    alert("Atención: Para usar el micrófono en el celular debes abrir la app desde un servidor con conexión HTTPS (como el enlace de GitHub Pages). En archivos locales por WhatsApp o HTTP no se permite acceso al micrófono.");
     return;
   }
 
@@ -289,7 +309,9 @@ async function startMicrophone() {
 
     isRunning = true;
     micBtn.textContent = "Escuchando...";
-    micBtn.style.background = "#555";
+    micBtn.style.background = "#333";
+    micBtn.style.color = "#00e676";
+    micBtn.style.boxShadow = "0 0 16px rgba(0, 230, 118, 0.4)";
     localStorage.setItem('micAutoStart', 'true');
     processPitch();
   } catch (err) {
@@ -311,7 +333,7 @@ document.body.addEventListener("pointerdown", () => {
 if ('serviceWorker' in navigator) {
   window.addEventListener('load', () => {
     navigator.serviceWorker.register('./sw.js')
-      .then((reg) => console.log('Service Worker v2 registrado con éxito:', reg.scope))
+      .then((reg) => console.log('Service Worker v3 registrado con éxito:', reg.scope))
       .catch((err) => console.error('Error al registrar Service Worker:', err));
   });
 }
