@@ -17,6 +17,12 @@ let buffer = null;
 let isRunning = false;
 let wasTuned = false;
 let deferredPrompt = null;
+let wakeLock = null;
+
+// Registro de cuerdas afinadas
+let tunedStrings = [false, false, false, false, false, false];
+let tunedTimer = null;
+let currentTunedIdx = null;
 
 // Variables para suavizado LERP de la aguja
 let currentRotation = 0;
@@ -36,6 +42,8 @@ const needle = document.getElementById("gauge-needle");
 const gaugeBox = document.querySelector(".gauge-box");
 const gaugeArc = document.querySelector(".gauge-arc");
 const pegBtns = document.querySelectorAll(".peg-btn");
+const progressCount = document.getElementById("progress-count");
+const resetBtn = document.getElementById("reset-btn");
 
 function getTargetFreq(midiNote) {
   return a4 * Math.pow(2, (midiNote - 69) / 12);
@@ -49,7 +57,48 @@ function updatePegLabels() {
   });
 }
 
-// Gestor de instalación de App PWA
+function updateTunedStringsUI() {
+  const count = tunedStrings.filter(Boolean).length;
+  if (progressCount) {
+    if (count === 6) {
+      progressCount.textContent = "🎉 ¡Guitarra Completa!";
+    } else {
+      progressCount.textContent = `${count} / 6 cuerdas`;
+    }
+  }
+
+  pegBtns.forEach(btn => {
+    const idx = parseInt(btn.dataset.string);
+    btn.classList.toggle("is-tuned", !!tunedStrings[idx]);
+  });
+}
+
+if (resetBtn) {
+  resetBtn.addEventListener("click", () => {
+    tunedStrings = [false, false, false, false, false, false];
+    updateTunedStringsUI();
+  });
+}
+
+// Mantiene la pantalla encendida (Screen Wake Lock API)
+async function requestWakeLock() {
+  try {
+    if ('wakeLock' in navigator) {
+      wakeLock = await navigator.wakeLock.request('screen');
+      console.log('Pantalla del celular mantenida encendida (Wake Lock activo)');
+    }
+  } catch (err) {
+    console.log('Wake Lock no disponible:', err);
+  }
+}
+
+document.addEventListener('visibilitychange', async () => {
+  if (wakeLock !== null && document.visibilityState === 'visible') {
+    await requestWakeLock();
+  }
+});
+
+// Gestor de instalación PWA
 window.addEventListener("beforeinstallprompt", (e) => {
   e.preventDefault();
   deferredPrompt = e;
@@ -130,6 +179,8 @@ function playTunedChime() {
 tuningSelect.addEventListener("change", (e) => {
   currentTuningKey = e.target.value;
   updatePegLabels();
+  tunedStrings = [false, false, false, false, false, false];
+  updateTunedStringsUI();
 });
 
 a4Slider.addEventListener("input", (e) => {
@@ -166,7 +217,7 @@ modeBtn.addEventListener("click", () => {
   pegBtns.forEach(b => b.classList.remove("active"));
 });
 
-// Autocorrelación para detección precisa de cuerda grave
+// Autocorrelación mejorada con selección de pico fundamental (evita confusión entre 1ª y 3ª cuerda)
 function autoCorrelate(buf, sampleRate) {
   let SIZE = buf.length;
   let rms = 0;
@@ -174,29 +225,49 @@ function autoCorrelate(buf, sampleRate) {
   rms = Math.sqrt(rms / SIZE);
   if (rms < 0.01) return -1;
 
-  let r1 = 0, r2 = SIZE - 1, thres = 0.2;
-  for (let i = 0; i < SIZE / 2; i++) {
-    if (Math.abs(buf[i]) < thres) { r1 = i; break; }
-  }
-  for (let i = 1; i < SIZE / 2; i++) {
-    if (Math.abs(buf[SIZE - i]) < thres) { r2 = SIZE - i; break; }
-  }
-
-  buf = buf.slice(r1, r2);
-  SIZE = buf.length;
-
   let c = new Array(SIZE).fill(0);
   for (let i = 0; i < SIZE; i++) {
-    for (let j = 0; j < SIZE - i; j++) c[i] = c[i] + buf[j] * buf[j + i];
+    for (let j = 0; j < SIZE - i; j++) {
+      c[i] += buf[j] * buf[j + i];
+    }
   }
 
   let d = 0;
-  while (c[d] > c[d + 1]) d++;
-  let maxval = -1, maxpos = -1;
-  for (let i = d; i < SIZE; i++) {
-    if (c[i] > maxval) { maxval = c[i]; maxpos = i; }
+  while (d < SIZE - 1 && c[d] > c[d + 1]) d++;
+
+  const minLag = Math.floor(sampleRate / 450);
+  const maxLag = Math.min(SIZE - 1, Math.ceil(sampleRate / 60));
+
+  let maxval = -1;
+  for (let i = Math.max(d, minLag); i <= maxLag; i++) {
+    if (c[i] > maxval) {
+      maxval = c[i];
+    }
   }
+
+  if (maxval <= 0) return -1;
+
+  // Seleccionar el PRIMER pico local que supere el 80% del máximo global
+  let maxpos = -1;
+  const threshold = maxval * 0.80;
+  for (let i = Math.max(d, minLag); i <= maxLag; i++) {
+    if (c[i] >= threshold && c[i] > c[i - 1] && c[i] >= c[i + 1]) {
+      maxpos = i;
+      break;
+    }
+  }
+
+  if (maxpos === -1) return -1;
+
+  // Interpolación parabólica sub-sample
   let T0 = maxpos;
+  const x1 = c[T0 - 1], x2 = c[T0], x3 = c[T0 + 1];
+  const a = (x1 + x3 - 2 * x2) / 2;
+  const b = (x3 - x1) / 2;
+  if (a !== 0) {
+    T0 = T0 - b / (2 * a);
+  }
+
   return sampleRate / T0;
 }
 
@@ -250,6 +321,24 @@ function processPitch() {
     centsDisplay.classList.toggle("tuned", isTuned);
     if (gaugeBox) gaugeBox.classList.toggle("tuned", isTuned);
     if (gaugeArc) gaugeArc.classList.toggle("tuned", isTuned);
+
+    if (isTuned) {
+      if (targetIdx !== null && targetIdx >= 0 && targetIdx < 6) {
+        if (currentTunedIdx !== targetIdx) {
+          currentTunedIdx = targetIdx;
+          clearTimeout(tunedTimer);
+          tunedTimer = setTimeout(() => {
+            if (!tunedStrings[targetIdx]) {
+              tunedStrings[targetIdx] = true;
+              updateTunedStringsUI();
+            }
+          }, 300);
+        }
+      }
+    } else {
+      currentTunedIdx = null;
+      clearTimeout(tunedTimer);
+    }
 
     if (isTuned && !wasTuned) {
       playTunedChime();
@@ -309,10 +398,11 @@ async function startMicrophone() {
 
     isRunning = true;
     micBtn.textContent = "Escuchando...";
-    micBtn.style.background = "#333";
+    micBtn.style.background = "#1a202c";
     micBtn.style.color = "#00e676";
     micBtn.style.boxShadow = "0 0 16px rgba(0, 230, 118, 0.4)";
     localStorage.setItem('micAutoStart', 'true');
+    requestWakeLock();
     processPitch();
   } catch (err) {
     console.error("Error micrófono:", err);
@@ -327,15 +417,17 @@ document.body.addEventListener("pointerdown", () => {
   if (!isRunning && localStorage.getItem('micAutoStart') === 'true') {
     startMicrophone();
   }
+  requestWakeLock();
 });
 
 // Registro del Service Worker para PWA Offline
 if ('serviceWorker' in navigator) {
   window.addEventListener('load', () => {
     navigator.serviceWorker.register('./sw.js')
-      .then((reg) => console.log('Service Worker v3 registrado con éxito:', reg.scope))
+      .then((reg) => console.log('Service Worker registrado con éxito:', reg.scope))
       .catch((err) => console.error('Error al registrar Service Worker:', err));
   });
 }
 
 updatePegLabels();
+updateTunedStringsUI();
