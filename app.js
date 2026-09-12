@@ -19,6 +19,24 @@ let wasTuned = false;
 let deferredPrompt = null;
 let wakeLock = null;
 
+// Hysteresis & Estabilización de Cuerda Auto
+let lockedStringIdx = null;
+let candidateStringIdx = null;
+let switchCounter = 0;
+
+// Filtro de Mediana para evitar picos de ruido (Jitter/Saltos bruscos)
+let pitchHistory = [];
+const HIST_SIZE = 5;
+
+function getMedianPitch(newPitch) {
+  pitchHistory.push(newPitch);
+  if (pitchHistory.length > HIST_SIZE) {
+    pitchHistory.shift();
+  }
+  const sorted = [...pitchHistory].sort((a, b) => a - b);
+  return sorted[Math.floor(sorted.length / 2)];
+}
+
 // Registro de cuerdas afinadas
 let tunedStrings = [false, false, false, false, false, false];
 let tunedTimer = null;
@@ -180,6 +198,7 @@ tuningSelect.addEventListener("change", (e) => {
   currentTuningKey = e.target.value;
   updatePegLabels();
   tunedStrings = [false, false, false, false, false, false];
+  lockedStringIdx = null;
   updateTunedStringsUI();
 });
 
@@ -217,13 +236,15 @@ modeBtn.addEventListener("click", () => {
   pegBtns.forEach(b => b.classList.remove("active"));
 });
 
-// Autocorrelación mejorada con selección de pico fundamental (evita confusión entre 1ª y 3ª cuerda)
+// Autocorrelación con Noise Gate RMS y selección de pico fundamental
 function autoCorrelate(buf, sampleRate) {
   let SIZE = buf.length;
   let rms = 0;
   for (let i = 0; i < SIZE; i++) rms += buf[i] * buf[i];
   rms = Math.sqrt(rms / SIZE);
-  if (rms < 0.01) return -1;
+
+  // Noise Gate: Ignorar silencio y ruido ambiental tenue
+  if (rms < 0.018) return -1;
 
   let c = new Array(SIZE).fill(0);
   for (let i = 0; i < SIZE; i++) {
@@ -271,9 +292,9 @@ function autoCorrelate(buf, sampleRate) {
   return sampleRate / T0;
 }
 
-// Bucle continuo de renderizado suave (LERP) para la aguja
+// Bucle continuo de renderizado ultra suave (LERP + damping) para la aguja
 function animateNeedle() {
-  currentRotation += (targetRotation - currentRotation) * 0.15;
+  currentRotation += (targetRotation - currentRotation) * 0.12;
   needle.style.transform = `translateX(-50%) rotate(${currentRotation.toFixed(2)}deg)`;
   requestAnimationFrame(animateNeedle);
 }
@@ -282,40 +303,72 @@ requestAnimationFrame(animateNeedle);
 function processPitch() {
   if (!isRunning) return;
   analyser.getFloatTimeDomainData(buffer);
-  const pitch = autoCorrelate(buffer, audioCtx.sampleRate);
+  const rawPitch = autoCorrelate(buffer, audioCtx.sampleRate);
 
-  if (pitch !== -1 && pitch >= 60 && pitch <= 450) {
+  if (rawPitch !== -1 && rawPitch >= 60 && rawPitch <= 450) {
+    const pitch = getMedianPitch(rawPitch);
     freqDisplay.textContent = `${pitch.toFixed(1)} Hz`;
     const tuning = TUNINGS[currentTuningKey];
 
-    let target = null;
     let targetIdx = selectedStringIdx;
 
-    if (targetIdx !== null) {
-      target = tuning[targetIdx];
-    } else {
+    if (targetIdx === null) {
+      // Auto-detect con Hysteresis para fijar la cuerda y evitar saltos
+      let closestIdx = 0;
       let minDiff = Infinity;
       tuning.forEach((str, i) => {
         const tf = getTargetFreq(str.m);
         const diff = Math.abs(1200 * Math.log2(pitch / tf));
         if (diff < minDiff) {
           minDiff = diff;
-          target = str;
-          targetIdx = i;
+          closestIdx = i;
         }
       });
+
+      if (lockedStringIdx === null) {
+        lockedStringIdx = closestIdx;
+      } else {
+        const currentTf = getTargetFreq(tuning[lockedStringIdx].m);
+        const currentDiff = Math.abs(1200 * Math.log2(pitch / currentTf));
+        if (currentDiff < 160) {
+          closestIdx = lockedStringIdx;
+          switchCounter = 0;
+        } else {
+          if (candidateStringIdx === closestIdx) {
+            switchCounter++;
+            if (switchCounter >= 5) {
+              lockedStringIdx = closestIdx;
+              switchCounter = 0;
+            } else {
+              closestIdx = lockedStringIdx;
+            }
+          } else {
+            candidateStringIdx = closestIdx;
+            switchCounter = 1;
+            closestIdx = lockedStringIdx;
+          }
+        }
+      }
+      targetIdx = closestIdx;
     }
 
+    const target = tuning[targetIdx];
     const targetFreq = getTargetFreq(target.m);
     const cents = 1200 * Math.log2(pitch / targetFreq);
 
     noteDisplay.textContent = target.n;
     centsDisplay.textContent = `${cents > 0 ? "+" : ""}${Math.round(cents)} cents`;
 
-    const clampedCents = Math.max(-50, Math.min(50, cents));
+    // Zona de amortiguación cerca del centro (Deadband stability ±4 cents)
+    let effectiveCents = cents;
+    if (Math.abs(cents) <= 4) {
+      effectiveCents = cents * 0.35; // Calma la aguja en el centro perfecto
+    }
+
+    const clampedCents = Math.max(-50, Math.min(50, effectiveCents));
     targetRotation = (clampedCents / 50) * 45;
 
-    const isTuned = Math.abs(cents) <= 3;
+    const isTuned = Math.abs(cents) <= 4;
     needle.classList.toggle("tuned", isTuned);
     noteDisplay.classList.toggle("tuned", isTuned);
     centsDisplay.classList.toggle("tuned", isTuned);
@@ -332,7 +385,7 @@ function processPitch() {
               tunedStrings[targetIdx] = true;
               updateTunedStringsUI();
             }
-          }, 300);
+          }, 350);
         }
       }
     } else {
@@ -348,6 +401,11 @@ function processPitch() {
     if (selectedStringIdx === null) {
       pegBtns.forEach((b, i) => b.classList.toggle("active", i === targetIdx));
     }
+  } else {
+    // Al haber silencio o decaimiento, retornar suavemente la aguja al centro sin saltos bruscos
+    pitchHistory = [];
+    targetRotation = targetRotation * 0.88;
+    switchCounter = 0;
   }
   requestAnimationFrame(processPitch);
 }
