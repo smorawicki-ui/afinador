@@ -242,64 +242,90 @@ modeBtn.addEventListener("click", () => {
 });
 
 // Autocorrelación con Noise Gate RMS
-function autoCorrelate(buf, sampleRate) {
-  let SIZE = buf.length;
-  let rms = 0;
-  for (let i = 0; i < SIZE; i++) rms += buf[i] * buf[i];
-  rms = Math.sqrt(rms / SIZE);
+function autoCorrelateYin(buf, sampleRate) {
+  // YIN algorithm – lightweight O(N) implementation
+  const size = buf.length;
+  const threshold = 0.15; // typical YIN threshold
+  const probability = new Float32Array(size / 2);
+  let tau;
+  let minTau = Math.floor(sampleRate / 450); // 450 Hz lower bound
+  let maxTau = Math.floor(sampleRate / 60);  // 60 Hz upper bound
 
-  if (rms < 0.018) return -1;
+  // Step 1: Difference function
+  for (tau = minTau; tau < maxTau; tau++) {
+    let sum = 0;
+    for (let i = 0; i < size - tau; i++) {
+      const diff = buf[i] - buf[i + tau];
+      sum += diff * diff;
+    }
+    probability[tau] = sum;
+  }
 
-  let c = new Array(SIZE).fill(0);
-  for (let i = 0; i < SIZE; i++) {
-    for (let j = 0; j < SIZE - i; j++) {
-      c[i] += buf[j] * buf[j + i];
+  // Step 2: Cumulative mean normalized difference
+  let cumulative = 0;
+  for (tau = minTau; tau < maxTau; tau++) {
+    cumulative += probability[tau];
+    probability[tau] = probability[tau] * tau / cumulative;
+  }
+
+  // Step 3: Absolute threshold
+  for (tau = minTau; tau < maxTau; tau++) {
+    if (probability[tau] < threshold) {
+      // Step 4: Parabolic interpolation for better accuracy
+      let betterTau = tau;
+      if (tau > minTau && tau < maxTau) {
+        const x0 = probability[tau - 1];
+        const x1 = probability[tau];
+        const x2 = probability[tau + 1];
+        const a = (x0 + x2 - 2 * x1) / 2;
+        const b = (x2 - x0) / 2;
+        if (a !== 0) betterTau = tau - b / (2 * a);
+      }
+      return sampleRate / betterTau;
     }
   }
 
-  let d = 0;
-  while (d < SIZE - 1 && c[d] > c[d + 1]) d++;
+  // No pitch found
+  return -1;
+}
 
-  const minLag = Math.floor(sampleRate / 450);
-  const maxLag = Math.min(SIZE - 1, Math.ceil(sampleRate / 60));
+// Adaptive RMS noise floor (percentile based)
+const rmsHistory = [];
+const RMS_HISTORY_MAX = 30; // ~1 second at 30 Hz
+function getAdaptiveRmsThreshold(rms) {
+  rmsHistory.push(rms);
+  if (rmsHistory.length > RMS_HISTORY_MAX) rmsHistory.shift();
+  const sorted = rmsHistory.slice().sort((a,b)=>a-b);
+  const idx = Math.floor(sorted.length * 0.1); // 10th percentile
+  return sorted[idx] * 1.5; // safety factor
+}
 
-  let maxval = -1;
-  for (let i = Math.max(d, minLag); i <= maxLag; i++) {
-    if (c[i] > maxval) {
-      maxval = c[i];
-    }
-  }
-
-  if (maxval <= 0) return -1;
-
-  let maxpos = -1;
-  const threshold = maxval * 0.80;
-  for (let i = Math.max(d, minLag); i <= maxLag; i++) {
-    if (c[i] >= threshold && c[i] > c[i - 1] && c[i] >= c[i + 1]) {
-      maxpos = i;
-      break;
-    }
-  }
-
-  if (maxpos === -1) return -1;
-
-  let T0 = maxpos;
-  const x1 = c[T0 - 1], x2 = c[T0], x3 = c[T0 + 1];
-  const a = (x1 + x3 - 2 * x2) / 2;
-  const b = (x3 - x1) / 2;
-  if (a !== 0) {
-    T0 = T0 - b / (2 * a);
-  }
-
-  return sampleRate / T0;
+// Confidence scoring based on recent pitch stability
+const pitchStability = [];
+const STABILITY_MAX = 5;
+function getConfidence(pitch) {
+  pitchStability.push(pitch);
+  if (pitchStability.length > STABILITY_MAX) pitchStability.shift();
+  if (pitchStability.length < STABILITY_MAX) return 0;
+  const mean = pitchStability.reduce((a,b)=>a+b,0)/pitchStability.length;
+  const variance = pitchStability.reduce((a,b)=>a+Math.pow(b-mean,2),0)/pitchStability.length;
+  const stddev = Math.sqrt(variance);
+  // Higher confidence when stddev is low (stable pitch)
+  return Math.max(0, 1 - stddev / 20); // arbitrary scaling
 }
 
 // Bucle continuo de inercia física (velocidad máxima limitada a 2.5°/frame)
 function animateNeedle() {
-  const diff = targetRotation - currentRotation;
-  // Paso limitado entre -2.2° y +2.2° por frame para movimiento pesado y relajado estilo medidor analógico
-  const step = Math.max(-2.2, Math.min(2.2, diff * 0.07));
-  currentRotation += step;
+  // Spring‑damper (critically damped) model for smooth motion
+  const dt = 1 / 60; // assuming 60fps
+  const stiffness = 300; // higher => quicker response
+  const damping = Math.sqrt(4 * stiffness); // critical damping
+  const force = stiffness * (targetRotation - currentRotation);
+  const acceleration = force - damping * 0; // velocity term omitted for critical damping simplification
+  currentRotation += acceleration * dt * dt;
+  // Clamp when close to target to avoid endless micro‑oscillations
+  const diff = Math.abs(targetRotation - currentRotation);
+  if (diff < 0.5) currentRotation = targetRotation;
   needle.style.transform = `translateX(-50%) rotate(${currentRotation.toFixed(2)}deg)`;
   requestAnimationFrame(animateNeedle);
 }
@@ -308,7 +334,7 @@ requestAnimationFrame(animateNeedle);
 function processPitch() {
   if (!isRunning) return;
   analyser.getFloatTimeDomainData(buffer);
-  const rawPitch = autoCorrelate(buffer, audioCtx.sampleRate);
+  const rawPitch = autoCorrelateYin(buffer, audioCtx.sampleRate);
 
   if (rawPitch !== -1 && rawPitch >= 60 && rawPitch <= 450) {
     // Filtro de salto armónico (evita alternancia de armónicos cuando la cuerda está muy fuera de tono)
@@ -524,3 +550,24 @@ if ('serviceWorker' in navigator) {
 
 updatePegLabels();
 updateTunedStringsUI();
+
+// One‑time microphone permission overlay handling
+const overlay = document.getElementById('mic-overlay');
+const overlayBtn = document.getElementById('overlay-start-btn');
+if (localStorage.getItem('micPermissionAsked') === 'true') {
+  overlay.style.display = 'none';
+} else {
+  overlay.style.display = 'flex';
+}
+overlayBtn.addEventListener('click', async () => {
+  localStorage.setItem('micPermissionAsked', 'true');
+  overlay.style.display = 'none';
+  await startMicrophone();
+});
+// If user clicks the mic button directly and overlay is still visible, hide it
+micBtn.addEventListener('click', () => {
+  if (overlay.style.display !== 'none') {
+    overlay.style.display = 'none';
+    localStorage.setItem('micPermissionAsked', 'true');
+  }
+});

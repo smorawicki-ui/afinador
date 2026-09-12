@@ -14,7 +14,7 @@
   <meta name="theme-color" content="#0b0d12">
   <link rel="stylesheet" href="style.css">
   <style>
-    @import url('https://fonts.googleapis.com/css2?family=Outfit:wght@400;600;700;800&display=swap');
+    /* Google Font import removed to improve load performance and offline capability */
 
     * {
       box-sizing: border-box;
@@ -439,9 +439,45 @@
       color: #f0f3f8;
       border: 1px solid rgba(255, 255, 255, 0.08);
     }
-  </style>
+.overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.85);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 9999;
+}
+.overlay-content {
+  text-align: center;
+  color: #f0f3f8;
+  font-size: 1rem;
+}
+.overlay-content button {
+  margin-top: 12px;
+  padding: 12px 24px;
+  font-size: 0.95rem;
+  font-weight: 700;
+  background: #00e676;
+  color: #0b0d12;
+  border: none;
+  border-radius: 8px;
+  box-shadow: 0 4px 12px rgba(0,230,118,0.4);
+  cursor: pointer;
+  transition: transform 0.1s;
+}
+.overlay-content button:active {
+  transform: scale(0.96);
+}
+</style>
 </head>
 <body>
+<div class="overlay" id="mic-overlay">
+  <div class="overlay-content">
+    <p>Para usar el afinador, necesitamos acceder al micrófono.</p>
+    <button id="overlay-start-btn">Permitir Micrófono</button>
+  </div>
+</div>
   <div class="app-container">
     <header>
       <button id="install-btn" class="install-btn">📱 Instalar App en el Celular</button>
