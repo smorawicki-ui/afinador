@@ -24,7 +24,11 @@ let lockedStringIdx = null;
 let candidateStringIdx = null;
 let switchCounter = 0;
 
-// Filtro de Mediana para evitar picos de ruido (Jitter/Saltos bruscos)
+// Filtro de Rechazo Armónico
+let lastValidPitch = null;
+let harmonicJumpCount = 0;
+
+// Filtro de Mediana para evitar picos de ruido (Jitter)
 let pitchHistory = [];
 const HIST_SIZE = 5;
 
@@ -42,7 +46,7 @@ let tunedStrings = [false, false, false, false, false, false];
 let tunedTimer = null;
 let currentTunedIdx = null;
 
-// Variables para suavizado LERP de la aguja
+// Variables para inercia física y LERP suave de aguja
 let currentRotation = 0;
 let targetRotation = 0;
 
@@ -56,6 +60,7 @@ const installBtn = document.getElementById("install-btn");
 const noteDisplay = document.getElementById("note-display");
 const freqDisplay = document.getElementById("freq-display");
 const centsDisplay = document.getElementById("cents-display");
+const tuneHelper = document.getElementById("tune-helper");
 const needle = document.getElementById("gauge-needle");
 const gaugeBox = document.querySelector(".gauge-box");
 const gaugeArc = document.querySelector(".gauge-arc");
@@ -103,7 +108,7 @@ async function requestWakeLock() {
   try {
     if ('wakeLock' in navigator) {
       wakeLock = await navigator.wakeLock.request('screen');
-      console.log('Pantalla del celular mantenida encendida (Wake Lock activo)');
+      console.log('Pantalla mantenida encendida (Wake Lock activo)');
     }
   } catch (err) {
     console.log('Wake Lock no disponible:', err);
@@ -236,14 +241,13 @@ modeBtn.addEventListener("click", () => {
   pegBtns.forEach(b => b.classList.remove("active"));
 });
 
-// Autocorrelación con Noise Gate RMS y selección de pico fundamental
+// Autocorrelación con Noise Gate RMS
 function autoCorrelate(buf, sampleRate) {
   let SIZE = buf.length;
   let rms = 0;
   for (let i = 0; i < SIZE; i++) rms += buf[i] * buf[i];
   rms = Math.sqrt(rms / SIZE);
 
-  // Noise Gate: Ignorar silencio y ruido ambiental tenue
   if (rms < 0.018) return -1;
 
   let c = new Array(SIZE).fill(0);
@@ -268,7 +272,6 @@ function autoCorrelate(buf, sampleRate) {
 
   if (maxval <= 0) return -1;
 
-  // Seleccionar el PRIMER pico local que supere el 80% del máximo global
   let maxpos = -1;
   const threshold = maxval * 0.80;
   for (let i = Math.max(d, minLag); i <= maxLag; i++) {
@@ -280,7 +283,6 @@ function autoCorrelate(buf, sampleRate) {
 
   if (maxpos === -1) return -1;
 
-  // Interpolación parabólica sub-sample
   let T0 = maxpos;
   const x1 = c[T0 - 1], x2 = c[T0], x3 = c[T0 + 1];
   const a = (x1 + x3 - 2 * x2) / 2;
@@ -292,9 +294,12 @@ function autoCorrelate(buf, sampleRate) {
   return sampleRate / T0;
 }
 
-// Bucle continuo de renderizado ultra suave (LERP + damping) para la aguja
+// Bucle continuo de inercia física (velocidad máxima limitada a 2.5°/frame)
 function animateNeedle() {
-  currentRotation += (targetRotation - currentRotation) * 0.12;
+  const diff = targetRotation - currentRotation;
+  // Paso limitado entre -2.2° y +2.2° por frame para movimiento pesado y relajado estilo medidor analógico
+  const step = Math.max(-2.2, Math.min(2.2, diff * 0.07));
+  currentRotation += step;
   needle.style.transform = `translateX(-50%) rotate(${currentRotation.toFixed(2)}deg)`;
   requestAnimationFrame(animateNeedle);
 }
@@ -306,6 +311,19 @@ function processPitch() {
   const rawPitch = autoCorrelate(buffer, audioCtx.sampleRate);
 
   if (rawPitch !== -1 && rawPitch >= 60 && rawPitch <= 450) {
+    // Filtro de salto armónico (evita alternancia de armónicos cuando la cuerda está muy fuera de tono)
+    if (lastValidPitch !== null) {
+      const ratio = rawPitch / lastValidPitch;
+      if ((ratio > 1.8 && ratio < 2.2) || (ratio > 0.45 && ratio < 0.55)) {
+        harmonicJumpCount++;
+        if (harmonicJumpCount < 5) {
+          return requestAnimationFrame(processPitch);
+        }
+      }
+    }
+    harmonicJumpCount = 0;
+    lastValidPitch = rawPitch;
+
     const pitch = getMedianPitch(rawPitch);
     freqDisplay.textContent = `${pitch.toFixed(1)} Hz`;
     const tuning = TUNINGS[currentTuningKey];
@@ -313,7 +331,6 @@ function processPitch() {
     let targetIdx = selectedStringIdx;
 
     if (targetIdx === null) {
-      // Auto-detect con Hysteresis para fijar la cuerda y evitar saltos
       let closestIdx = 0;
       let minDiff = Infinity;
       tuning.forEach((str, i) => {
@@ -359,16 +376,30 @@ function processPitch() {
     noteDisplay.textContent = target.n;
     centsDisplay.textContent = `${cents > 0 ? "+" : ""}${Math.round(cents)} cents`;
 
-    // Zona de amortiguación cerca del centro (Deadband stability ±4 cents)
+    // Guía visual clara (TENSAR vs DESTENSAR)
+    const isTuned = Math.abs(cents) <= 4;
+    if (tuneHelper) {
+      if (isTuned) {
+        tuneHelper.textContent = "PERFECTO ✓";
+        tuneHelper.className = "tune-helper tuned";
+      } else if (cents < -4) {
+        tuneHelper.textContent = "⬆️ TENSAR CUERDA";
+        tuneHelper.className = "tune-helper tighten";
+      } else {
+        tuneHelper.textContent = "⬇️ DESTENSAR CUERDA";
+        tuneHelper.className = "tune-helper loosen";
+      }
+    }
+
+    // Amortiguación suave cerca del centro
     let effectiveCents = cents;
-    if (Math.abs(cents) <= 4) {
-      effectiveCents = cents * 0.35; // Calma la aguja en el centro perfecto
+    if (isTuned) {
+      effectiveCents = cents * 0.25;
     }
 
     const clampedCents = Math.max(-50, Math.min(50, effectiveCents));
     targetRotation = (clampedCents / 50) * 45;
 
-    const isTuned = Math.abs(cents) <= 4;
     needle.classList.toggle("tuned", isTuned);
     noteDisplay.classList.toggle("tuned", isTuned);
     centsDisplay.classList.toggle("tuned", isTuned);
@@ -402,10 +433,14 @@ function processPitch() {
       pegBtns.forEach((b, i) => b.classList.toggle("active", i === targetIdx));
     }
   } else {
-    // Al haber silencio o decaimiento, retornar suavemente la aguja al centro sin saltos bruscos
+    lastValidPitch = null;
     pitchHistory = [];
     targetRotation = targetRotation * 0.88;
     switchCounter = 0;
+    if (tuneHelper && !isRunning) {
+      tuneHelper.textContent = "Toca una cuerda...";
+      tuneHelper.className = "tune-helper";
+    }
   }
   requestAnimationFrame(processPitch);
 }
