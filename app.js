@@ -61,9 +61,9 @@ let tunedStrings = [false, false, false, false, false, false];
 let tunedTimer = null;
 let currentTunedIdx = null;
 
-// Variables para inercia física y LERP suave de aguja
-let currentRotation = 0;
-let targetRotation = 0;
+// Variables para inercia física y LERP suave de aguja (reposo en -45°)
+let currentRotation = -45;
+let targetRotation = -45;
 
 // DOM Elements
 const tuningSelect = document.getElementById("tuning-select");
@@ -256,18 +256,24 @@ modeBtn.addEventListener("click", () => {
   pegBtns.forEach(b => b.classList.remove("active"));
 });
 
-// Autocorrelación con Noise Gate RMS
+// Autocorrelación YIN con Noise Gate RMS y Verificación de Subarmónicos (Octavas)
 function autoCorrelateYin(buf, sampleRate) {
-  // YIN algorithm – lightweight O(N) implementation
   const size = buf.length;
-  const threshold = 0.15; // typical YIN threshold
-  const probability = new Float32Array(size / 2);
-  let tau;
-  let minTau = Math.floor(sampleRate / 450); // 450 Hz lower bound
-  let maxTau = Math.floor(sampleRate / 60);  // 60 Hz upper bound
 
-  // Step 1: Difference function
-  for (tau = minTau; tau < maxTau; tau++) {
+  // Noise gate RMS: si el volumen es muy bajo, ignorar inmediatamente
+  let rms = 0;
+  for (let i = 0; i < size; i++) rms += buf[i] * buf[i];
+  rms = Math.sqrt(rms / size);
+  if (rms < 0.012) return -1;
+
+  const threshold = 0.20;
+  const maxLag = Math.floor(size / 2);
+  const probability = new Float32Array(maxLag);
+  let minTau = Math.floor(sampleRate / 450); // 450 Hz limite superior de guitarra
+  let maxTau = Math.min(maxLag - 1, Math.floor(sampleRate / 60));  // 60 Hz limite inferior
+
+  // Paso 1: Función de diferencia
+  for (let tau = minTau; tau < maxTau; tau++) {
     let sum = 0;
     for (let i = 0; i < size - tau; i++) {
       const diff = buf[i] - buf[i + tau];
@@ -276,32 +282,42 @@ function autoCorrelateYin(buf, sampleRate) {
     probability[tau] = sum;
   }
 
-  // Step 2: Cumulative mean normalized difference
+  // Paso 2: Normalización por media acumulada
   let cumulative = 0;
-  for (tau = minTau; tau < maxTau; tau++) {
+  for (let tau = minTau; tau < maxTau; tau++) {
     cumulative += probability[tau];
-    probability[tau] = probability[tau] * tau / cumulative;
+    probability[tau] = probability[tau] * tau / (cumulative || 1);
   }
 
-  // Step 3: Absolute threshold
-  for (tau = minTau; tau < maxTau; tau++) {
+  // Paso 3: Umbral absoluto
+  let foundTau = -1;
+  for (let tau = minTau; tau < maxTau; tau++) {
     if (probability[tau] < threshold) {
-      // Step 4: Parabolic interpolation for better accuracy
-      let betterTau = tau;
-      if (tau > minTau && tau < maxTau) {
-        const x0 = probability[tau - 1];
-        const x1 = probability[tau];
-        const x2 = probability[tau + 1];
-        const a = (x0 + x2 - 2 * x1) / 2;
-        const b = (x2 - x0) / 2;
-        if (a !== 0) betterTau = tau - b / (2 * a);
-      }
-      return sampleRate / betterTau;
+      foundTau = tau;
+      break;
     }
   }
 
-  // No pitch found
-  return -1;
+  if (foundTau === -1) return -1;
+
+  // Paso 4: Verificación de subarmónico fundamental (Evita que la 6ª cuerda E2 se detecte como E3 o E4)
+  const doubleTau = Math.round(foundTau * 2);
+  if (doubleTau < maxTau && probability[doubleTau] < 0.28) {
+    foundTau = doubleTau;
+  }
+
+  // Paso 5: Interpolación parabólica para máxima precisión
+  let betterTau = foundTau;
+  if (foundTau > minTau && foundTau < maxTau - 1) {
+    const x0 = probability[foundTau - 1];
+    const x1 = probability[foundTau];
+    const x2 = probability[foundTau + 1];
+    const a = (x0 + x2 - 2 * x1) / 2;
+    const b = (x2 - x0) / 2;
+    if (a !== 0) betterTau = foundTau - b / (2 * a);
+  }
+
+  return sampleRate / betterTau;
 }
 
 // Adaptive RMS noise floor (percentile based)
@@ -352,12 +368,12 @@ function processPitch() {
   const rawPitch = autoCorrelateYin(buffer, audioCtx.sampleRate);
 
   if (rawPitch !== -1 && rawPitch >= 60 && rawPitch <= 450) {
-    // Filtro de salto armónico (evita alternancia de armónicos cuando la cuerda está muy fuera de tono)
+    // Filtro de salto armónico
     if (lastValidPitch !== null) {
       const ratio = rawPitch / lastValidPitch;
       if ((ratio > 1.8 && ratio < 2.2) || (ratio > 0.45 && ratio < 0.55)) {
         harmonicJumpCount++;
-        if (harmonicJumpCount < 5) {
+        if (harmonicJumpCount < 4) {
           return requestAnimationFrame(processPitch);
         }
       }
@@ -417,7 +433,7 @@ function processPitch() {
     noteDisplay.textContent = target.n;
     centsDisplay.textContent = `${cents > 0 ? "+" : ""}${Math.round(cents)} cents`;
 
-    // Guía visual clara (TENSAR vs DESTENSAR)
+    // Guía visual (TENSAR vs DESTENSAR)
     const isTuned = Math.abs(cents) <= 4;
     if (tuneHelper) {
       if (isTuned) {
@@ -432,33 +448,11 @@ function processPitch() {
       }
     }
 
-    // ---- Needle smoothing & jitter filtering ----
-    let effectiveCents = cents;
-    if (isTuned) {
-      effectiveCents = cents * 0.25;
-    }
-
-    // Apply EMA smoothing to pitch for more stable needle
-    emaPitch = emaPitch !== null ? EMA_ALPHA * pitch + (1 - EMA_ALPHA) * emaPitch : pitch;
-    const smoothCents = 1200 * Math.log2(emaPitch / targetFreq);
-
-    // Use smoothed cents for effective calculation
-    effectiveCents = isTuned ? smoothCents * 0.25 : smoothCents;
-
-    // Jitter filter: ignore tiny changes
-    if (Math.abs(effectiveCents - prevEffectiveCents) < NEEDLE_JITTER_THRESHOLD) {
-      effectiveCents = prevEffectiveCents;
-    }
-    prevEffectiveCents = effectiveCents;
-
-    // Clamp and limit rotation delta per frame
-    const clampedCents = Math.max(-50, Math.min(50, effectiveCents));
+    // Suavizado continuo de rotación de aguja (sin saltos bruscos)
+    const clampedCents = Math.max(-50, Math.min(50, cents));
     const desiredRotation = (clampedCents / 50) * 45;
-    const delta = desiredRotation - currentRotation;
-    const limitedDelta = Math.abs(delta) > MAX_NEEDLE_DELTA ? Math.sign(delta) * MAX_NEEDLE_DELTA : delta;
-    targetRotation = currentRotation + limitedDelta;
+    targetRotation = targetRotation + 0.22 * (desiredRotation - targetRotation);
 
-    // UI updates
     needle.classList.toggle("tuned", isTuned);
     noteDisplay.classList.toggle("tuned", isTuned);
     centsDisplay.classList.toggle("tuned", isTuned);
@@ -492,14 +486,26 @@ function processPitch() {
       pegBtns.forEach((b, i) => b.classList.toggle("active", i === targetIdx));
     }
   } else {
+    // Silencio / Sin tono detectado: la aguja reposa suavemente a -45° (extremo izquierdo)
     lastValidPitch = null;
     pitchHistory = [];
-    targetRotation = targetRotation * 0.88;
+    emaPitch = null;
+    targetRotation = targetRotation + 0.15 * (-45 - targetRotation);
     switchCounter = 0;
-    if (tuneHelper && !isRunning) {
-      tuneHelper.textContent = "Toca una cuerda...";
+
+    freqDisplay.textContent = "0.0 Hz";
+    noteDisplay.textContent = "--";
+    centsDisplay.textContent = "";
+    if (tuneHelper) {
+      tuneHelper.textContent = isRunning ? "Toca una cuerda..." : "Inicia el micrófono";
       tuneHelper.className = "tune-helper";
     }
+
+    needle.classList.remove("tuned");
+    noteDisplay.classList.remove("tuned");
+    centsDisplay.classList.remove("tuned");
+    if (gaugeBox) gaugeBox.classList.remove("tuned");
+    if (gaugeArc) gaugeArc.classList.remove("tuned");
   }
   requestAnimationFrame(processPitch);
 }
@@ -542,7 +548,7 @@ async function startMicrophone() {
     lowpassFilter.frequency.setValueAtTime(800, audioCtx.currentTime);
 
     analyser = audioCtx.createAnalyser();
-    analyser.fftSize = 2048;
+    analyser.fftSize = 4096; // Buffer de 4096 muestras (~90ms) para precisión en graves (E2, A2)
     buffer = new Float32Array(analyser.fftSize);
 
     source.connect(lowpassFilter);
