@@ -30,22 +30,11 @@ let harmonicJumpCount = 0;
 
 // Filtro de Mediana para evitar picos de ruido (Jitter)
 let pitchHistory = [];
-const HIST_SIZE = 5;
+const HIST_SIZE = 7;
 
-// ---- New smoothing & stability constants ----
-const EMA_ALPHA = 0.2;               // pitch EMA smoothing factor
-const NEEDLE_JITTER_THRESHOLD = 1;   // cents change ignored
-const MAX_NEEDLE_DELTA = 5;          // max degrees per frame
-const STABLE_FRAME_COUNT = 4;        // frames needed to lock string
-const TUNED_DEADZONE = 4;            // cents within which we consider tuned
-const CONFIDENCE_THRESHOLD = 0.7;    // minimum confidence for auto‑detect
-
-// EMA pitch accumulator
-let emaPitch = null;
-// Previous effective cents for jitter filtering
-let prevEffectiveCents = 0;
-// Counter for stable detection of a candidate string
-let stableCount = 0;
+// Verificación de estabilidad para tilde de afinado (8 frames ~ 130ms)
+let tunedFrameCount = 0;
+const REQUIRED_TUNED_FRAMES = 8;
 
 function getMedianPitch(newPitch) {
   pitchHistory.push(newPitch);
@@ -256,24 +245,23 @@ modeBtn.addEventListener("click", () => {
   pegBtns.forEach(b => b.classList.remove("active"));
 });
 
-// Autocorrelación YIN con Noise Gate RMS y Verificación de Subarmónicos (Octavas)
-// Autocorrelación YIN limpia con Noise Gate RMS
+// Algoritmo YIN de Grado Profesional con Búsqueda de Mínimo Local e Interpolación Parabólica
 function autoCorrelateYin(buf, sampleRate) {
   const size = buf.length;
 
-  // Noise gate RMS: si el volumen es muy bajo, ignorar inmediatamente
+  // Gate RMS de silencio: ignora fotogramas inactivos
   let rms = 0;
   for (let i = 0; i < size; i++) rms += buf[i] * buf[i];
   rms = Math.sqrt(rms / size);
-  if (rms < 0.012) return -1;
+  if (rms < 0.014) return -1;
 
-  const threshold = 0.20;
+  const threshold = 0.15; // Umbral YIN estándar
   const maxLag = Math.floor(size / 2);
   const probability = new Float32Array(maxLag);
-  let minTau = Math.floor(sampleRate / 450); // 450 Hz limite superior de guitarra
-  let maxTau = Math.min(maxLag - 1, Math.floor(sampleRate / 60));  // 60 Hz limite inferior
+  const minTau = Math.floor(sampleRate / 450); // 450 Hz limite superior de guitarra (E4)
+  const maxTau = Math.min(maxLag - 1, Math.floor(sampleRate / 60));  // 60 Hz limite inferior (E2)
 
-  // Paso 1: Función de diferencia
+  // Paso 1: Función de diferencia acumulada
   for (let tau = minTau; tau < maxTau; tau++) {
     let sum = 0;
     for (let i = 0; i < size - tau; i++) {
@@ -283,32 +271,49 @@ function autoCorrelateYin(buf, sampleRate) {
     probability[tau] = sum;
   }
 
-  // Paso 2: Normalización por media acumulada
+  // Paso 2: Normalización por media acumulada (YIN Step 2)
   let cumulative = 0;
   for (let tau = minTau; tau < maxTau; tau++) {
     cumulative += probability[tau];
     probability[tau] = probability[tau] * tau / (cumulative || 1);
   }
 
-  // Paso 3: Umbral absoluto para encontrar el primer período fundamental
+  // Paso 3: Búsqueda del MÍNIMO LOCAL exacto por debajo del umbral
   let foundTau = -1;
   for (let tau = minTau; tau < maxTau; tau++) {
     if (probability[tau] < threshold) {
+      // Avanzar mientras la función siga cayendo para encontrar el valle exacto (mínimo local)
+      while (tau + 1 < maxTau && probability[tau + 1] < probability[tau]) {
+        tau++;
+      }
       foundTau = tau;
       break;
     }
   }
 
+  // Si ningún punto cruzó 0.15, buscar el mínimo absoluto en todo el rango si es menor a 0.35
+  if (foundTau === -1) {
+    let minVal = 0.35;
+    for (let tau = minTau; tau < maxTau; tau++) {
+      if (probability[tau] < minVal &&
+          (tau === minTau || probability[tau] <= probability[tau - 1]) &&
+          (tau === maxTau - 1 || probability[tau] <= probability[tau + 1])) {
+        minVal = probability[tau];
+        foundTau = tau;
+      }
+    }
+  }
+
   if (foundTau === -1) return -1;
 
-  // Paso 4: Interpolación parabólica para máxima precisión de frecuencia
+  // Paso 4: Interpolación parabólica sub-muestra alrededor del mínimo local exacto
   let betterTau = foundTau;
   if (foundTau > minTau && foundTau < maxTau - 1) {
-    const x0 = probability[foundTau - 1];
-    const x1 = probability[foundTau];
-    const x2 = probability[foundTau + 1];
-    const a = (x0 + x2 - 2 * x1) / 2;
-    const b = (x2 - x0) / 2;
+    const s0 = probability[foundTau - 1];
+    const s1 = probability[foundTau];
+    const s2 = probability[foundTau + 1];
+    const a = (s0 + s2 - 2 * s1) / 2;
+    const b = (s2 - s0) / 2;
     if (a !== 0) betterTau = foundTau - b / (2 * a);
   }
 
@@ -438,8 +443,16 @@ function processPitch() {
     noteDisplay.textContent = target.n;
     centsDisplay.textContent = `${cents > 0 ? "+" : ""}${Math.round(cents)} cents`;
 
+    // Verificación de estabilidad sosteniendo 8 fotogramas continuos (~130ms)
+    const isNearCenter = Math.abs(cents) <= 4;
+    if (isNearCenter) {
+      tunedFrameCount++;
+    } else {
+      tunedFrameCount = 0;
+    }
+    const isTuned = tunedFrameCount >= REQUIRED_TUNED_FRAMES;
+
     // Guía visual (TENSAR vs DESTENSAR)
-    const isTuned = Math.abs(cents) <= 4;
     if (tuneHelper) {
       if (isTuned) {
         tuneHelper.textContent = "PERFECTO ✓";
@@ -453,10 +466,13 @@ function processPitch() {
       }
     }
 
-    // Suavizado continuo de rotación de aguja (sin saltos bruscos)
-    const clampedCents = Math.max(-50, Math.min(50, cents));
+    // Suavizado continuo de aguja + Zona Muerta Inmóvil en Centro (±3 cents)
+    let clampedCents = Math.max(-50, Math.min(50, cents));
+    if (Math.abs(clampedCents) <= 3) {
+      clampedCents = 0; // Aguja 100% inmóvil en el centro perfecto
+    }
     const desiredRotation = (clampedCents / 50) * 45;
-    targetRotation = targetRotation + 0.22 * (desiredRotation - targetRotation);
+    targetRotation = targetRotation + 0.16 * (desiredRotation - targetRotation);
 
     needle.classList.toggle("tuned", isTuned);
     noteDisplay.classList.toggle("tuned", isTuned);
@@ -491,11 +507,11 @@ function processPitch() {
       pegBtns.forEach((b, i) => b.classList.toggle("active", i === targetIdx));
     }
   } else {
-    // Silencio / Sin tono detectado: la aguja reposa suavemente a -45° (extremo izquierdo)
+    // Silencio / Sin tono detectado: reposo de aguja a -45°
     lastValidPitch = null;
     pitchHistory = [];
-    emaPitch = null;
-    targetRotation = targetRotation + 0.15 * (-45 - targetRotation);
+    tunedFrameCount = 0;
+    targetRotation = targetRotation + 0.12 * (-45 - targetRotation);
     switchCounter = 0;
 
     freqDisplay.textContent = "0.0 Hz";
@@ -550,7 +566,7 @@ async function startMicrophone() {
 
     const lowpassFilter = audioCtx.createBiquadFilter();
     lowpassFilter.type = "lowpass";
-    lowpassFilter.frequency.setValueAtTime(800, audioCtx.currentTime);
+    lowpassFilter.frequency.setValueAtTime(500, audioCtx.currentTime); // Filtro pasa-bajos a 500Hz para guitarra limpia
 
     analyser = audioCtx.createAnalyser();
     analyser.fftSize = 4096; // Buffer de 4096 muestras (~90ms) para precisión en graves (E2, A2)
