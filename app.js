@@ -257,6 +257,7 @@ modeBtn.addEventListener("click", () => {
 });
 
 // Autocorrelación YIN con Noise Gate RMS y Verificación de Subarmónicos (Octavas)
+// Autocorrelación YIN limpia con Noise Gate RMS
 function autoCorrelateYin(buf, sampleRate) {
   const size = buf.length;
 
@@ -289,7 +290,7 @@ function autoCorrelateYin(buf, sampleRate) {
     probability[tau] = probability[tau] * tau / (cumulative || 1);
   }
 
-  // Paso 3: Umbral absoluto
+  // Paso 3: Umbral absoluto para encontrar el primer período fundamental
   let foundTau = -1;
   for (let tau = minTau; tau < maxTau; tau++) {
     if (probability[tau] < threshold) {
@@ -300,13 +301,7 @@ function autoCorrelateYin(buf, sampleRate) {
 
   if (foundTau === -1) return -1;
 
-  // Paso 4: Verificación de subarmónico fundamental (Evita que la 6ª cuerda E2 se detecte como E3 o E4)
-  const doubleTau = Math.round(foundTau * 2);
-  if (doubleTau < maxTau && probability[doubleTau] < 0.28) {
-    foundTau = doubleTau;
-  }
-
-  // Paso 5: Interpolación parabólica para máxima precisión
+  // Paso 4: Interpolación parabólica para máxima precisión de frecuencia
   let betterTau = foundTau;
   if (foundTau > minTau && foundTau < maxTau - 1) {
     const x0 = probability[foundTau - 1];
@@ -428,7 +423,17 @@ function processPitch() {
 
     const target = tuning[targetIdx];
     const targetFreq = getTargetFreq(target.m);
-    const cents = 1200 * Math.log2(pitch / targetFreq);
+
+    // Protección de Seguridad contra Saltos de Octava (Evita sobretensión de cuerdas)
+    let effectivePitch = pitch;
+    const ratio = pitch / targetFreq;
+    if (ratio > 0.45 && ratio < 0.55) {
+      effectivePitch = pitch * 2; // Subarmónico detectado (1 octava abajo)
+    } else if (ratio > 1.8 && ratio < 2.2) {
+      effectivePitch = pitch / 2; // Armónico detectado (1 octava arriba)
+    }
+
+    const cents = 1200 * Math.log2(effectivePitch / targetFreq);
 
     noteDisplay.textContent = target.n;
     centsDisplay.textContent = `${cents > 0 ? "+" : ""}${Math.round(cents)} cents`;
